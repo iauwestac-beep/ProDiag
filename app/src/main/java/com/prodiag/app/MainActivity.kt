@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -115,7 +116,8 @@ private val mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp
 @Composable
 fun Root(ui: DiagState, engine: Engine, onConnect: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
-    val titles = listOf("داشبورد", "نمودار", "خطاها", "شتاب ۰-۱۰۰", "ترمینال")
+    var menu by remember { mutableStateOf(false) }
+    val titles = listOf("داشبورد", "نمودار", "خطاها", "پیشرفته", "شتاب ۰-۱۰۰", "ترمینال")
     val live = ui.connected && !ui.demo
     Column(Modifier.fillMaxSize().systemBarsPadding().padding(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -129,8 +131,22 @@ fun Root(ui: DiagState, engine: Engine, onConnect: () -> Unit) {
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("حالت شبیه‌ساز (Demo)")
-            Spacer(Modifier.width(8.dp))
+            Text("پروتکل:", fontSize = 13.sp)
+            Box {
+                TextButton(onClick = { menu = true }) { Text(PROTOCOLS[ui.protocolSel], fontSize = 13.sp) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    PROTOCOLS.forEachIndexed { i, n ->
+                        DropdownMenuItem(text = { Text(n) }, onClick = {
+                            menu = false
+                            ui.protocolSel = i
+                            if (ui.connected) engine.renegotiate()
+                        })
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Text("Demo", fontSize = 13.sp)
+            Spacer(Modifier.width(6.dp))
             Switch(checked = ui.demo, onCheckedChange = { if (it) engine.startDemo() else engine.disconnect() })
         }
         ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
@@ -143,7 +159,8 @@ fun Root(ui: DiagState, engine: Engine, onConnect: () -> Unit) {
             0 -> DashTab(ui, m)
             1 -> GraphTab(ui, m)
             2 -> DtcTab(ui, engine, m)
-            3 -> AccelTab(ui, engine, m)
+            3 -> AdvTab(ui, engine, m)
+            4 -> AccelTab(ui, engine, m)
             else -> TermTab(ui, engine, m)
         }
     }
@@ -151,24 +168,24 @@ fun Root(ui: DiagState, engine: Engine, onConnect: () -> Unit) {
 
 @Composable
 fun DashTab(ui: DiagState, modifier: Modifier) {
-    val cards = listOf(
-        Triple("rpm", "دور موتور", "RPM"), Triple("speed", "سرعت", "km/h"),
-        Triple("temp", "دمای آب", "°C"), Triple("throttle", "دریچه گاز", "%"),
-        Triple("load", "بار موتور", "%"), Triple("volt", "ولتاژ باتری", "V"),
-        Triple("iat", "دمای هوای ورودی", "°C"), Triple("maf", "هوای ورودی (MAF)", "g/s"),
-        Triple("map", "فشار منیفولد (MAP)", "kPa"),
-    )
+    val cards = buildList {
+        add(Triple("rpm", "دور موتور", "RPM"))
+        add(Triple("speed", "سرعت", "km/h"))
+        add(Triple("volt", "ولتاژ باتری", "V"))
+        PIDS.filter { ui.supported.isEmpty() || it.key in ui.supported }
+            .forEach { add(Triple(it.key, it.title, it.unit)) }
+    }
     LazyVerticalGrid(
         GridCells.Fixed(2), modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(cards) { (k, title, unit) ->
-            val color = cardColors[cards.indexOfFirst { it.first == k }]
+            val color = cardColors[cards.indexOfFirst { it.first == k } % cardColors.size]
             Card {
                 Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(title, fontSize = 14.sp)
-                    Text(ui.vals[k] ?: "--", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = color)
+                    Text(ui.vals[k] ?: "--", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = color)
                     Text(unit, fontSize = 12.sp, color = Color.Gray)
                 }
             }
@@ -208,15 +225,19 @@ fun GraphTab(ui: DiagState, modifier: Modifier) {
 fun DtcTab(ui: DiagState, engine: Engine, modifier: Modifier) {
     var confirm by remember { mutableStateOf(false) }
     Column(modifier) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { engine.readDtcs() }, Modifier.weight(1f)) { Text("اسکن و ترجمه خطاها") }
-            Button(
-                onClick = { confirm = true }, Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C)),
-            ) { Text("پاک کردن خطاها") }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button({ engine.readDtcs("03", "ذخیره‌شده") }, Modifier.weight(1f)) { Text("ذخیره‌شده", fontSize = 12.sp) }
+            Button({ engine.readDtcs("07", "در انتظار") }, Modifier.weight(1f)) { Text("در انتظار", fontSize = 12.sp) }
+            Button({ engine.readDtcs("0A", "دائمی") }, Modifier.weight(1f)) { Text("دائمی", fontSize = 12.sp) }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 12.dp)) {
-            Text(ui.dtcText, fontSize = 15.sp)
+        Button(
+            onClick = { confirm = true }, Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C)),
+        ) { Text("پاک کردن خطاها و چراغ چک") }
+        SelectionContainer {
+            Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 12.dp)) {
+                Text(ui.dtcText, fontSize = 15.sp)
+            }
         }
     }
     if (confirm) AlertDialog(
@@ -232,9 +253,31 @@ fun DtcTab(ui: DiagState, engine: Engine, modifier: Modifier) {
 }
 
 @Composable
+fun AdvTab(ui: DiagState, engine: Engine, modifier: Modifier) {
+    Column(modifier) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button({ engine.runReport() }, Modifier.weight(1f)) { Text("گزارش تشخیص", fontSize = 12.sp) }
+            Button({ engine.readVin() }, Modifier.weight(1f)) { Text("VIN", fontSize = 12.sp) }
+            Button({ engine.readMil() }, Modifier.weight(1f)) { Text("چراغ چک", fontSize = 12.sp) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button({ engine.readFreeze() }, Modifier.weight(1f)) { Text("Freeze Frame", fontSize = 12.sp) }
+            Button({ engine.showPids() }, Modifier.weight(1f)) { Text("PIDهای ECU", fontSize = 12.sp) }
+        }
+        SelectionContainer {
+            Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
+                Text(ui.advText, fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
 fun AccelTab(ui: DiagState, engine: Engine, modifier: Modifier) {
     val timerColor = when (ui.accel) {
-        "DONE" -> Color(0xFF2ECC71); "RUNNING" -> Color(0xFFE67E22); else -> Color(0xFFF1C40F)
+        "DONE" -> Color(0xFF2ECC71)
+        "RUNNING" -> Color(0xFFE67E22)
+        else -> Color(0xFFF1C40F)
     }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Text(ui.accelMsg, color = Color(0xFFF39C12), fontSize = 15.sp)
